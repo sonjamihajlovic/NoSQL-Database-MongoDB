@@ -1,0 +1,212 @@
+db.final.createIndex({ 
+  "DatePublished": 1,
+  "RecipeIngredient.RecipeIngredientParts": 1,
+})
+
+db.final.createIndex({ 
+  "RecipeCategory": 1,
+  "Reviews.Review": "text" 
+})
+
+ db.final.createIndex({ 
+  "Reviews.AuthorName": 1
+})
+
+PRE OPTIMIZACIJE:
+
+//UPIT 1
+db.recipes.aggregate([
+  { $match: { RecipeCategory: "Steak", AggregatedRating: { $gte: 4.5 } } },
+  { $group: { _id: "$AuthorName", recipeCount: { $sum: 1 } } },
+  { $sort: { recipeCount: -1 } },
+  { $limit: 10 },
+  { $project: { _id: 0, AuthorName: "$_id", recipeCount: 1 } }
+])
+
+//UPIT 2
+db.recipes.aggregate([
+  {
+    $match: { RecipeCategory: "Dessert", Calories: { $lt: 500 }, RecipeServings: 6 }
+  },
+  {
+    $lookup: {
+      from: "reviews",
+      localField: "RecipeId",
+      foreignField: "RecipeId",
+      as: "Reviews"
+    }
+  },
+  {
+    $match: { "Reviews.Review": { $exists: true, $ne: null }, $expr: { $gt: [ { $strLenCP: { $arrayElemAt: ["$Reviews.Review", 0] } }, 100 ] } }
+  },
+  {
+    $sort: { AggregatedRating: -1 }
+  },
+  {
+    $project: { _id: 0, Name: 1, TotalTime: 1, RecipeIngredientParts: 1 }
+  }
+])
+
+
+//UPIT 3
+db.recipes.aggregate([
+  {
+    $match: {
+      SugarContent: { $gt: 100 },
+      FatContent: { $gt: 200 },
+      CholesterolContent: { $gt: 100 },
+      SodiumContent: { $gt: 4000 }
+    }
+  },
+  {
+    $lookup: {
+      from: "reviews",
+      localField: "RecipeId",
+      foreignField: "RecipeId",
+      as: "reviews"
+    }
+  },
+  {
+    $match: {
+      "reviews.AuthorName": "Sydney Mike"
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      RecipeName: "$Name",
+      Calories: "$Calories",
+      DatePublished: "$DatePublished"
+    }
+  }
+])
+
+
+//UPIT 4
+db.recipes.aggregate([
+  { $match: { AggregatedRating: { $gt: 4.0 }, $expr: { $gte: [ { $size: "$RecipeIngredientParts" }, 5 ] }, TotalTime: { $gte: 120, $lte: 240 } } },
+  { $addFields: { FatGreaterThanZero: { $gt: ["$FatContent", 0] } } },
+  { $match: { FatGreaterThanZero: true } },
+  { $addFields: { ProteinToFatRatio: { $divide: ["$ProteinContent", "$FatContent"] } } },
+  { $match: { ProteinToFatRatio: { $gte: 2 } } },
+  { $project: { _id: 0, Name: 1, Calories: 1, FatContent: 1, ProteinContent: 1, AggregatedRating: 1, ProteinToFatRatio: 1 } },
+  { $sort: { AggregatedRating: -1 } },
+  { $limit: 10 }
+])
+
+
+//UPIT 5
+db.recipes.aggregate([
+  { $match: { DatePublished: { $gte: ISODate("2020-01-01"), $lt: ISODate("2021-01-01") }, RecipeIngredientParts: { $all: ["eggs", "salt"] } } },
+  { $lookup: { from: "reviews", localField: "RecipeId", foreignField: "RecipeId", as: "reviews" } },
+  { $unwind: "$reviews" },
+  { $group: { _id: "$Name", AuthorName: { $first: "$AuthorName" }, DatePublished: { $first: "$DatePublished" }, avgRating: { $avg: "$reviews.Rating" } } },
+  { $sort: { avgRating: -1 } }
+])
+
+
+
+POSLE OPTIMIZACIJE:
+
+ 
+//UPIT 1
+ db.final.aggregate([
+  { $match: { "RecipeCategory": "Steak", "AggregatedRating": { $gte: 4.5 } } },
+  { $group: { _id: "$Author.AuthorName", recipeCount: { $sum: 1 } } },
+  { $sort: { recipeCount: -1 } },
+  { $limit: 10 },
+  { $project: { _id: 0, AuthorName: "$_id", recipeCount: 1 } }
+])
+ 
+
+//UPIT 2
+db.final.aggregate([
+  { 
+    $match: { 
+      "RecipeCategory": "Dessert",
+      "Nutrition.Calories": { $lt: 500 },
+      "RecipeServings": 6,
+      "Reviews": { $elemMatch: { "Review": { $regex: /^.{100,}$/ } } }
+    } 
+  },
+  { 
+    $sort: { 
+      "AggregatedRating": -1 
+    } 
+  },
+  { 
+    $project: { 
+      _id: 0, 
+      Name: 1,
+      "Times.TotalTime": 1, 
+      "RecipeIngredient.RecipeIngredientParts": 1,
+      "AggregatedRating": 1
+    } 
+  }
+])
+
+
+//UPIT 3
+db.final.aggregate([
+  { 
+    $match: { 
+      "IsHealthy": false,  
+      "Reviews.AuthorName": "Sydney Mike"  
+    } 
+  },
+  { 
+    $project: { 
+      _id: 0, 
+      Name: 1,
+      "Nutrition.Calories": 1,
+      DatePublished: 1
+    } 
+  }
+])
+
+ 
+//UPIT 4
+db.final.aggregate([
+  { $match: {"AggregatedRating": { $gt: 4.0 }, $expr: { $gte: [ { $size: "$RecipeIngredient.RecipeIngredientParts" }, 5 ] }, "Times.TotalTime": { $gte: 120, $lte: 240 } } },
+  { $project: { _id: 0, Name: 1, "Nutrition.Calories": 1, "Nutrition.FatContent": 1, "Nutrition.ProteinContent": 1, "ProteinToFatRatio": 1 } },
+  { $sort: { "AggregatedRating": -1 } },
+  { $limit: 10 }
+])
+
+
+//UPIT 5
+db.final.aggregate([
+  { 
+    $match: { 
+      "DatePublished": { $gte: ISODate("2000-01-01"), $lt: ISODate("2021-01-01") },
+      "RecipeIngredient.RecipeIngredientParts": { $in: ["eggs", "salt", "butter", "brown sugar", "granulated sugar", "vanilla extract", "flour", "pecan halves"] }
+    } 
+  },
+  { $addFields: { reviewCount: { $size: "$Reviews" } } },
+  { $match: { reviewCount: { $gte: 10 } } },
+  { 
+    $project: {
+      Name: 1,
+      AuthorName: "$Author.AuthorName",
+      DatePublished: 1,
+      "AggregatedRating" : 1,
+      reviewCount: 1
+    } 
+  }
+])
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
