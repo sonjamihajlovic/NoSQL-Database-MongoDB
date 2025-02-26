@@ -1,0 +1,211 @@
+// NEOPTIMIZOVANI UPITI 
+// UPIT 1 
+var lowCalorieThreshold = db.recipes_neoptimizovano.aggregate([
+  { $group: { _id: null, avgCalories: { $avg: "$Calories" } } },
+  { $project: { _id: 0, lowCalorieThreshold: { $multiply: ["$avgCalories", 0.5] } } }
+]).next().lowCalorieThreshold;
+
+var lowCalorieCount = db.recipes_neoptimizovano.aggregate([
+  { $match: { Calories: { $lte: lowCalorieThreshold } } },
+  { $count: "lowCalorieCount" }
+]).next().lowCalorieCount;
+
+var highCalorieCount = db.recipes_neoptimizovano.aggregate([
+  { $match: { Calories: { $gt: lowCalorieThreshold } } },
+  { $count: "highCalorieCount" }
+]).next().highCalorieCount;
+
+var totalRecipesCount = lowCalorieCount + highCalorieCount;
+var lowCaloriePercentage = (lowCalorieCount / totalRecipesCount) * 100;
+var highCaloriePercentage = (highCalorieCount / totalRecipesCount) * 100;
+
+var lowCalorieAuthor = db.recipes_neoptimizovano.aggregate([
+  { $match: { Calories: { $lte: lowCalorieThreshold } } },
+  { $group: { _id: "$AuthorName", count: { $sum: 1 } } },
+  { $sort: { count: -1 } },
+  { $limit: 1 }
+]).next();
+
+var highCalorieAuthor = db.recipes_neoptimizovano.aggregate([
+  { $match: { Calories: { $gt: lowCalorieThreshold } } },
+  { $group: { _id: "$AuthorName", count: { $sum: 1 } } },
+  { $sort: { count: -1 } },
+  { $limit: 1 }
+]).next();
+
+var results = {
+  lowCaloriePercentage: lowCaloriePercentage.toFixed(2) + "%",
+  highCaloriePercentage: highCaloriePercentage.toFixed(2) + "%",
+  lowCalorieAuthor: { authorName: lowCalorieAuthor._id, recipeCount: lowCalorieAuthor.count },
+  highCalorieAuthor: { authorName: highCalorieAuthor._id, recipeCount: highCalorieAuthor.count }
+};
+
+printjson(results);
+
+/// upit 2 
+db.recipes_neoptimizovano.aggregate([
+  { $match: { RecipeServings: 4, RecipeIngredientParts: { $exists: true, $ne: [] }, $expr: { $gte: [{ $size: "$RecipeIngredientParts" }, 2] }, RecipeCategory: "Vegetable" } },
+  { $addFields: { numIngredients: { $size: "$RecipeIngredientParts" } } },
+  { $sort: { numIngredients: 1 } },
+  { $limit: 1 },
+  { $project: { Name: 1, RecipeIngredientParts: 1, Description: 1, TotalTime: 1, RecipeInstructions: 1 } }
+]);
+
+//// upit 3 
+db.recipes_neoptimizovano.aggregate([
+    { $match: { "Keywords": "Chicken", "AggregatedRating": { $gte: 4 }, "PrepTime": { $lt: 60 } } },
+    { $addFields: { numIngredients: { $cond: { if: { $isArray: "$RecipeIngredientParts" }, then: { $size: "$RecipeIngredientParts" }, else: { $cond: { if: { $eq: ["$RecipeIngredientParts", ""] }, then: 0, else: 1 } } } } } },
+    { $match: { "numIngredients": { $gt: 0 } } },
+    { $project: { "Name": 1, "AuthorName": 1, "RecipeCategory": 1, "RecipeIngredientParts": 1, "Calories": 1, "ProteinContent": 1, "RecipeServings": 1, "RecipeInstructions": 1, "numIngredients": 1 } },
+    { $sort: { "Calories": -1, "ProteinContent": -1 } },
+    { $limit: 10 }
+]);
+
+// UPIT 4
+var percentiles = db.recipes_neoptimizovano.aggregate([
+    { $group: { _id: null, allTimes: { $push: "$TotalTime" } } },
+    { $project: { allTimes: { $setUnion: ["$allTimes", []] } } },
+    { $unwind: "$allTimes" },
+    { $sort: { allTimes: 1 } },
+    { $group: { _id: null, allTimes: { $push: "$allTimes" }, count: { $sum: 1 } } },
+    { $project: { count: 1, shortThreshold: { $arrayElemAt: ["$allTimes", { $floor: { $multiply: [0.33, "$count"] } }] }, mediumThreshold: { $arrayElemAt: ["$allTimes", { $floor: { $multiply: [0.66, "$count"] } }] } } }
+]).toArray();
+
+var shortThreshold = percentiles[0].shortThreshold;
+var mediumThreshold = percentiles[0].mediumThreshold;
+
+print("Short Threshold:", shortThreshold);
+print("Medium Threshold:", mediumThreshold);
+
+var results = { "Kratki recepti": [], "Srednji recepti": [], "Dugi recepti": [] };
+var calorieMin = 300;
+var calorieMax = 700;
+var proteinMin = 5;
+var proteinMax = 10;
+
+db.recipes_neoptimizovano.aggregate([
+    { $match: { TotalTime: { $lte: shortThreshold }, Calories: { $gt: calorieMin, $lt: calorieMax }, ProteinContent: { $gt: proteinMin, $lt: proteinMax } } },
+    { $sort: { Calories: 1, ProteinContent: -1 } },
+    { $limit: 5 },
+    { $project: { Name: 1, TotalTime: 1, Calories: 1, ProteinContent: 1, RecipeCategory: 1, RecipeIngredientParts: 1, RecipeIngredientQuantities: 1, Description: 1 } }
+]).forEach(function(doc) {
+    results["Kratki recepti"].push(doc);
+});
+
+db.recipes_neoptimizovano.aggregate([
+    { $match: { TotalTime: { $gt: shortThreshold, $lte: mediumThreshold }, Calories: { $gt: calorieMin, $lt: calorieMax }, ProteinContent: { $gt: proteinMin, $lt: proteinMax } } },
+    { $sort: { Calories: 1, ProteinContent: -1 } },
+    { $limit: 5 },
+    { $project: { Name: 1, TotalTime: 1, Calories: 1, ProteinContent: 1, RecipeCategory: 1, RecipeIngredientParts: 1, RecipeIngredientQuantities: 1, Description: 1 } }
+]).forEach(function(doc) {
+    results["Srednji recepti"].push(doc);
+});
+
+db.recipes_neoptimizovano.aggregate([
+    { $match: { TotalTime: { $gt: mediumThreshold }, Calories: { $gt: calorieMin, $lt: calorieMax }, ProteinContent: { $gt: proteinMin, $lt: proteinMax } } },
+    { $sort: { Calories: 1, ProteinContent: -1 } },
+    { $limit: 5 },
+    { $project: { Name: 1, TotalTime: 1, Calories: 1, ProteinContent: 1, RecipeCategory: 1, RecipeIngredientParts: 1, RecipeIngredientQuantities: 1, Description: 1 } }
+]).forEach(function(doc) {
+    results["Dugi recepti"].push(doc);
+});
+
+printjson(results);
+
+/// upit 5 
+db.reviews.aggregate([
+  { $lookup: { from: "recipes_neoptimizovano", localField: "RecipeId", foreignField: "RecipeId", as: "recipeDetails" } },
+  { $unwind: "$recipeDetails" },
+  { $match: { "recipeDetails.RecipeCategory": "Dessert" } },
+  { $group: { _id: "$recipeDetails.RecipeId", RecipeName: { $first: "$recipeDetails.Name" }, TotalReviews: { $first: "$recipeDetails.ReviewCount" } } },
+  { $sort: { TotalReviews: -1 } },
+  { $project: { _id: 0, RecipeId: "$_id", RecipeName: 1, TotalReviews: 1 } },
+  { $limit: 3 },
+  { $lookup: { from: "reviews", localField: "RecipeId", foreignField: "RecipeId", as: "reviews" } },
+  { $project: { RecipeId: 1, RecipeName: 1, TotalReviews: 1, Reviews: "$reviews.Review" } }
+]);
+
+// INDEXI
+db.merged_recipes.createIndex({ "Nutrition.Calories": 1, "Author.AuthorName": 1 });
+db.merged_recipes.createIndex({ "Keywords": "text" })
+db.merged_recipes.createIndex({ "Times.TotalTime": 1 })
+
+// OPTIMIZOVANI UPITI
+
+// UPIT 1 
+var lowCalorieThresholdResult = db.merged_recipes.aggregate([
+  { $group: { _id: null, avgCalories: { $avg: "$Nutrition.Calories" } } },
+  { $project: { _id: 0, lowCalorieThreshold: { $multiply: ["$avgCalories", 0.5] } } }]).next();
+var lowCalorieThreshold = lowCalorieThresholdResult.lowCalorieThreshold;
+var pipeline = [
+  {$facet: {lowCalorieCount: [
+        { $match: { "Nutrition.Calories": { $lte: lowCalorieThreshold } } },{ $count: "count" }],
+      highCalorieCount: [
+        { $match: { "Nutrition.Calories": { $gt: lowCalorieThreshold } } },{ $count: "count" }],
+      totalRecipesCount: [{ $group: { _id: null, count: { $sum: 1 } } }],
+      lowCalorieAuthor: [
+        { $match: { "Nutrition.Calories": { $lte: lowCalorieThreshold } } },
+        { $group: { _id: "$Author.AuthorName", count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 1 }],
+      highCalorieAuthor: [
+        { $match: { "Nutrition.Calories": { $gt: lowCalorieThreshold } } },
+        { $group: { _id: "$Author.AuthorName", count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 1 } ]}},
+  {$project: {lowCaloriePercentage: { $multiply: [
+          { $divide: [{ $arrayElemAt: ["$lowCalorieCount.count", 0] }, { $arrayElemAt: ["$totalRecipesCount.count", 0] }] }, 100]},
+      highCaloriePercentage: { $multiply: [
+          { $divide: [{ $arrayElemAt: ["$highCalorieCount.count", 0] }, { $arrayElemAt: ["$totalRecipesCount.count", 0] }] },100 ]},
+      lowCalorieAuthor: { 
+        authorName: { $arrayElemAt: ["$lowCalorieAuthor._id", 0] }, 
+        recipeCount: { $arrayElemAt: ["$lowCalorieAuthor.count", 0] } },
+      highCalorieAuthor: { 
+        authorName: { $arrayElemAt: ["$highCalorieAuthor._id", 0] }, 
+        recipeCount: { $arrayElemAt: ["$highCalorieAuthor.count", 0] } }}}];
+var results = db.merged_recipes.aggregate(pipeline).next();
+printjson(results);
+
+// UPIT 2 
+db.merged_recipes.aggregate([
+  { $match: { RecipeServings: 4, "RecipeIngredient.RecipeIngredientParts": { $exists: true, $not: { $size: 0 } }, 
+      $expr: { $gte: [{ $size: "$RecipeIngredient.RecipeIngredientParts" }, 2] }, RecipeCategory: "Vegetable" } },
+  { $addFields: { numIngredients: { $size: "$RecipeIngredient.RecipeIngredientParts" } } },
+  { $sort: { numIngredients: 1 } },
+  { $limit: 1 },
+  { $project: { Name: 1, "RecipeIngredient.RecipeIngredientParts": 1, Description: 1, TotalTime: 1, RecipeInstructions: 1 } }
+]);
+
+// UPIT 3
+db.merged_recipes.aggregate([
+    { $match: { "Keywords": "Chicken", "AggregatedRating": { $gte: 4 }, "Times.PrepTime": { $lt: 60 } } },
+    { $addFields: { numIngredients: { $cond: { if: { $isArray: "$RecipeIngredient.RecipeIngredientParts" }, 
+        then: { $size: "$RecipeIngredient.RecipeIngredientParts" }, else: { $cond: { if: { $eq: ["$RecipeIngredientParts", ""] }, then: 0, else: 1 } } } } } },
+    { $match: { "numIngredients": { $gt: 0 } } },
+    { $project: { "Name": 1, "Author.AuthorName": 1, "RecipeCategory": 1, "RecipeIngredient.RecipeIngredientParts": 1, 
+        "Nutrition.Calories": 1, "Nutrition.ProteinContent": 1, "RecipeServings": 1, "RecipeInstructions": 1, "numIngredients": 1 } },
+    { $sort: { "Nutrition.Calories": -1, "Nutrition.ProteinContent": -1 } },
+    { $limit: 10 }
+]);
+
+// upit 4 
+db.merged_recipes.aggregate([
+    { $facet: { counts: [ { $bucket: { groupBy: "$Times.TotalTime", boundaries: [0, 370.25, 740.5, 1110.75, 1485], 
+        default: "Other", output: { count: { $sum: 1 } } } } ], total: [ { $group: { _id: null, totalRecipesCount: { $sum: 1 } } } ] } },
+    { $unwind: "$counts" },
+    { $project: { _id: 0, category: { $switch: { branches: [ { case: { $eq: ["$counts._id", 0] }, then: "do 6h" }, 
+        { case: { $eq: ["$counts._id", 370.25] }, then: "od 6 do 12h" }, { case: { $eq: ["$counts._id", 740.5] }, then: "od 12 do 18h" }, 
+        { case: { $eq: ["$counts._id", 1110.75] }, then: "od 18 do 24h" } ], default: "Other" } }, 
+        percentage: { $multiply: [ { $divide: ["$counts.count", { $arrayElemAt: ["$total.totalRecipesCount", 0] }] }, 100 ] } } }
+]).forEach(function(doc) { printjson({ [doc.category]: doc.percentage.toFixed(2) + "%" }); });
+
+// upit 5
+db.merged_recipes_rev.aggregate([
+  { $match: { RecipeCategory: "Dessert" } },
+  { $sort: { ReviewCount: -1 } },
+  { $limit: 3 },
+  { $project: { 
+      _id: 0, 
+      RecipeId: "$RecipeId", 
+      RecipeName: "$Name", 
+      TotalReviews: "$ReviewCount", 
+      Reviews: "$Reviews" 
+    } 
+  }
+]);
